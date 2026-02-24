@@ -26,6 +26,7 @@ class User extends Authenticatable
         'role',
         'department_id',
         'is_active',
+        'avatar_url',
     ];
 
     /**

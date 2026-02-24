@@ -18,3 +18,4 @@ AGENTS.local.md
 /storage/*.key
 /config/php-cs-fixer.cache
 .phpunit.result.cache
+

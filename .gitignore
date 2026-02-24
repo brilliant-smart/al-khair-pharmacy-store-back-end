@@ -22,3 +22,14 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Atlassian Rovo Dev
+.rovodev/
+AGENTS.md
+AGENTS.local.md
+.rovo-dev/
+
+# Ignore all markdown files
+*.md
+# Except the main README
+!README.md

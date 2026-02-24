@@ -64,13 +64,16 @@ class UserController extends Controller
     }
 
     /**
-     * Update user (role / department / status)
+     * Update user (role / department / status / profile)
      */
     public function update(Request $request, User $user)
     {
         $this->authorizeMaster();
 
         $validated = $request->validate([
+            'name'          => 'sometimes|string|max:255',
+            'email'         => 'sometimes|email|unique:users,email,' . $user->id,
+            'password'      => 'nullable|min:8',
             'role'          => 'sometimes|in:master_admin,section_head',
             'department_id' => 'nullable|exists:departments,id',
             'is_active'     => 'boolean',
@@ -87,6 +90,13 @@ class UserController extends Controller
 
         if (($validated['role'] ?? null) === 'master_admin') {
             $validated['department_id'] = null;
+        }
+
+        // Hash password if provided
+        if (!empty($validated['password'])) {
+            $validated['password'] = Hash::make($validated['password']);
+        } else {
+            unset($validated['password']);
         }
 
         $user->update($validated);

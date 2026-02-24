@@ -4,40 +4,255 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Storage;
 class Product extends Model
 {
+    use SoftDeletes;
     protected $fillable = [
         'name',
         'slug',
+        'sku',
+        'barcode',
         'description',
         'price',
+        'cost_price',
+        'last_purchase_price',
+        'stock_quantity',
+        'unit_type',
+        'low_stock_threshold',
         'image_url',
         'department_id',
         'is_active',
+        'is_featured',
+        'expiry_date',
+        'batch_number',
+        'serial_number',
+        'reorder_point',
+        'max_stock_level',
+        'track_expiry',
+        'track_batch',
+        'track_serial',
+        'auto_reorder_enabled',
+        'auto_reorder_quantity',
+        'warehouse_location',
+        'shelf_position',
     ];
-
-    /**
-     * Get the route key for the model.
-     * Default to 'id' for route binding
-     */
-    public function getRouteKeyName()
-    {
-        return 'id';
-    }
 
     public function department(): BelongsTo
     {
         return $this->belongsTo(Department::class);
     }
 
-    protected $appends = ['image_full_url'];
+    /**
+     * Get the stock movements for the product.
+     */
+    public function stockMovements(): HasMany
+    {
+        return $this->hasMany(StockMovement::class);
+    }
+
+    public function purchaseOrderItems(): HasMany
+    {
+        return $this->hasMany(PurchaseOrderItem::class);
+    }
+
+    public function saleItems(): HasMany
+    {
+        return $this->hasMany(SaleItem::class);
+    }
+
+    /**
+     * Get the batches for the product.
+     */
+    public function batches(): HasMany
+    {
+        return $this->hasMany(ProductBatch::class);
+    }
+
+    /**
+     * Get active batches ordered by FEFO (First Expired, First Out)
+     */
+    public function activeBatches(): HasMany
+    {
+        return $this->hasMany(ProductBatch::class)
+            ->where('status', 'active')
+            ->where('quantity_remaining', '>', 0)
+            ->orderBy('expiry_date', 'asc');
+    }
+
+    /**
+     * Get stock transfers for this product
+     */
+    public function stockTransfers(): HasMany
+    {
+        return $this->hasMany(StockTransfer::class);
+    }
+
+    /**
+     * Get auto reorder logs for this product
+     */
+    public function autoReorderLogs(): HasMany
+    {
+        return $this->hasMany(AutoReorderLog::class);
+    }
+
+    /**
+     * Get price history for this product
+     */
+    public function priceHistory(): HasMany
+    {
+        return $this->hasMany(ProductPriceHistory::class);
+    }
+
+    /**
+     * Get latest price from last purchase order
+     */
+    public function getLastPurchasePriceInfoAttribute()
+    {
+        $lastHistory = $this->priceHistory()
+            ->where('change_type', 'purchase')
+            ->latest('changed_at')
+            ->first();
+
+        if (!$lastHistory) {
+            return null;
+        }
+
+        return [
+            'price' => $lastHistory->new_price,
+            'date' => $lastHistory->changed_at,
+            'supplier' => $lastHistory->supplier_name,
+            'reference' => $lastHistory->reference_number,
+        ];
+    }
+
+    protected $appends = ['image_full_url', 'stock_status'];
+
+    protected function casts(): array
+    {
+        return [
+            'is_active' => 'boolean',
+            'is_featured' => 'boolean',
+            'track_expiry' => 'boolean',
+            'track_batch' => 'boolean',
+            'track_serial' => 'boolean',
+            'auto_reorder_enabled' => 'boolean',
+            'price' => 'decimal:2',
+            'cost_price' => 'decimal:2',
+            'last_purchase_price' => 'decimal:2',
+            'stock_quantity' => 'integer',
+            'low_stock_threshold' => 'integer',
+            'reorder_point' => 'integer',
+            'max_stock_level' => 'integer',
+            'auto_reorder_quantity' => 'integer',
+            'expiry_date' => 'date',
+        ];
+    }
 
     public function getImageFullUrlAttribute(): ?string
     {
         return $this->image_url
             ? asset('storage/' . $this->image_url)
             : null;
+    }
+
+    /**
+     * Get the stock status of the product.
+     */
+    public function getStockStatusAttribute(): string
+    {
+        if ($this->stock_quantity <= 0) {
+            return 'out_of_stock';
+        } elseif ($this->stock_quantity <= $this->low_stock_threshold) {
+            return 'low_stock';
+        }
+        return 'in_stock';
+    }
+
+    /**
+     * Check if product is in stock.
+     */
+    public function isInStock(): bool
+    {
+        return $this->stock_quantity > 0;
+    }
+
+    /**
+     * Check if product has low stock.
+     */
+    public function hasLowStock(): bool
+    {
+        return $this->stock_quantity > 0 && $this->stock_quantity <= $this->low_stock_threshold;
+    }
+
+    /**
+     * Check if product is out of stock.
+     */
+    public function isOutOfStock(): bool
+    {
+        return $this->stock_quantity <= 0;
+    }
+
+    /**
+     * Get profit margin (percentage)
+     */
+    public function getProfitMarginAttribute(): float
+    {
+        if ($this->cost_price <= 0 || $this->price <= 0) {
+            return 0;
+        }
+
+        return (($this->price - $this->cost_price) / $this->price) * 100;
+    }
+
+    /**
+     * Get profit per unit
+     */
+    public function getUnitProfitAttribute(): float
+    {
+        return $this->price - $this->cost_price;
+    }
+
+    /**
+     * Check if product needs reordering
+     */
+    public function getNeedsReorderAttribute(): bool
+    {
+        return $this->stock_quantity <= $this->reorder_point;
+    }
+
+    /**
+     * Check if product is expiring soon (within 30 days)
+     */
+    public function getIsExpiringSoonAttribute(): bool
+    {
+        if (!$this->expiry_date) {
+            return false;
+        }
+
+        return $this->expiry_date->diffInDays(now()) <= 30 && $this->expiry_date->isFuture();
+    }
+
+    /**
+     * Check if product is expired
+     */
+    public function getIsExpiredAttribute(): bool
+    {
+        if (!$this->expiry_date) {
+            return false;
+        }
+
+        return $this->expiry_date->isPast();
+    }
+
+    /**
+     * Get total stock value (cost)
+     */
+    public function getStockValueAttribute(): float
+    {
+        return $this->stock_quantity * $this->cost_price;
     }
 
     protected static function booted()

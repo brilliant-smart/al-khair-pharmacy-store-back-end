@@ -12,7 +12,15 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        // API returns 401, web redirects to login
+        $middleware->redirectGuestsTo(function ($request) {
+            return $request->expectsJson() ? null : '/login';
+        });
+        
+        // Register middleware aliases
+        $middleware->alias([
+            'hide.profit' => \App\Http\Middleware\HideProfitData::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //
