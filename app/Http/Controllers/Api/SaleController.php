@@ -276,6 +276,44 @@ class SaleController extends Controller
     }
 
     /**
+     * Print receipt
+     * GET /api/sales/{sale}/receipt
+     */
+    public function printReceipt(Request $request, Sale $sale)
+    {
+        // Support token authentication via query parameter for print preview
+        $token = $request->input('token') ?? $request->bearerToken();
+        
+        if ($token) {
+            $tokenModel = \Laravel\Sanctum\PersonalAccessToken::findToken($token);
+            if ($tokenModel) {
+                $user = $tokenModel->tokenable;
+                
+                // Authorization check
+                if ($user->role === 'section_head' && $sale->department_id !== $user->department_id) {
+                    return response()->json(['message' => 'Unauthorized'], 403);
+                }
+                
+                $sale->load(['items.product', 'user']);
+                return view('pdf.sale-receipt', compact('sale'));
+            }
+        }
+        
+        // If no valid token, check if user is authenticated via sanctum middleware
+        $user = request()->user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated'], 401);
+        }
+        
+        if ($user->role === 'section_head' && $sale->department_id !== $user->department_id) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $sale->load(['items.product', 'user']);
+        return view('pdf.sale-receipt', compact('sale'));
+    }
+
+    /**
      * Delete sale (soft delete) - Only for today's sales
      * DELETE /api/sales/{sale}
      */

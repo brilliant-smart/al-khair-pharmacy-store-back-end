@@ -146,6 +146,10 @@ class PurchaseOrderController extends Controller
             // VAT/Tax removed - Nigeria uses inclusive pricing
             'items.*.discount_percent' => 'nullable|numeric|min:0|max:100',
             'items.*.notes' => 'nullable|string',
+            // WORLD-CLASS: Batch & Expiry Tracking
+            'items.*.batch_number' => 'nullable|string|max:255',
+            'items.*.manufacturing_date' => 'nullable|date|before_or_equal:today',
+            'items.*.expiry_date' => 'nullable|date|after_or_equal:today',
         ]);
 
         try {
@@ -351,24 +355,59 @@ class PurchaseOrderController extends Controller
      */
     public function receiveGoods(Request $request, PurchaseOrder $purchaseOrder)
     {
-        // CRITICAL: Payment must be recorded before receiving goods
-        // Even for credit purchases, Master Admin must confirm payment method
+        // Log incoming request for debugging
+        \Log::info('Receive goods request', [
+            'po_id' => $purchaseOrder->id,
+            'po_status' => $purchaseOrder->status,
+            'payment_method' => $purchaseOrder->payment_method,
+            'payment_status' => $purchaseOrder->payment_status,
+            'request_data' => $request->all(),
+        ]);
+
+        // WORLD-CLASS BEST PRACTICE: Payment workflow check
+        // For CREDIT purchases: Allow receiving goods (pay later)
+        // For CASH/IMMEDIATE purchases: Require payment first
+        $paymentMethod = $purchaseOrder->payment_method;
+        $isCreditPurchase = in_array($paymentMethod, ['credit', 'credit_7', 'credit_14', 'credit_30', 'credit_60']);
         $isPaid = in_array($purchaseOrder->payment_status, ['paid', 'partially_paid']);
         
-        if (!$isPaid) {
+        // Only enforce payment for non-credit purchases
+        if (!$isCreditPurchase && !$isPaid) {
+            \Log::warning('Payment required before receiving goods', [
+                'po_id' => $purchaseOrder->id,
+                'payment_method' => $paymentMethod,
+                'payment_status' => $purchaseOrder->payment_status,
+            ]);
+            
             return response()->json([
-                'message' => 'Payment must be recorded before receiving goods. Please record payment first (even for credit purchases).',
+                'message' => 'Payment must be recorded before receiving goods for cash/immediate purchases.',
                 'action_required' => 'Record payment to proceed with receiving goods',
                 'payment_status' => $purchaseOrder->payment_status ?? 'unpaid',
+                'payment_method' => $paymentMethod,
                 'total_amount' => $purchaseOrder->total_amount,
             ], 422);
         }
 
-        $validated = $request->validate([
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|exists:products,id',
-            'items.*.quantity_received' => 'required|integer|min:1',
-        ]);
+        try {
+            $validated = $request->validate([
+                'items' => 'required|array|min:1',
+                'items.*.product_id' => 'required|exists:products,id',
+                'items.*.quantity_received' => 'required|integer|min:1',
+                'items.*.batch_number' => 'nullable|string|max:255',
+                'items.*.manufacturing_date' => 'nullable|date|before_or_equal:today',
+                'items.*.expiry_date' => 'nullable|date|after_or_equal:today',
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            \Log::error('Validation failed for receive goods', [
+                'errors' => $e->errors(),
+                'request' => $request->all(),
+            ]);
+            
+            return response()->json([
+                'message' => 'Validation failed',
+                'errors' => $e->errors(),
+            ], 422);
+        }
 
         try {
             $po = $this->purchaseOrderService->receiveGoods(
@@ -377,11 +416,22 @@ class PurchaseOrderController extends Controller
                 $request->user()
             );
 
+            \Log::info('Goods received successfully', [
+                'po_id' => $po->id,
+                'po_number' => $po->po_number,
+            ]);
+
             return response()->json([
                 'message' => 'Goods received successfully',
                 'purchase_order' => $po,
             ]);
         } catch (\Exception $e) {
+            \Log::error('Failed to receive goods', [
+                'po_id' => $purchaseOrder->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            
             return response()->json([
                 'message' => 'Failed to receive goods',
                 'error' => $e->getMessage(),
@@ -459,8 +509,44 @@ class PurchaseOrderController extends Controller
      * Export purchase order as PDF
      * GET /api/purchase-orders/{purchaseOrder}/pdf
      */
-    public function exportPdf(PurchaseOrder $purchaseOrder)
+    public function exportPdf(Request $request, PurchaseOrder $purchaseOrder)
     {
+        // Support token authentication via query parameter for new window/tab
+        $token = $request->input('token') ?? $request->bearerToken();
+        
+        if ($token) {
+            $tokenModel = \Laravel\Sanctum\PersonalAccessToken::findToken($token);
+            if ($tokenModel) {
+                $user = $tokenModel->tokenable;
+                
+                // Authorization check
+                if ($user->role === 'section_head' && $purchaseOrder->department_id !== $user->department_id) {
+                    return response()->json(['message' => 'Unauthorized'], 403);
+                }
+                
+                $purchaseOrder->load(['items.product', 'supplier', 'department', 'creator']);
+
+                // Check if DomPDF is available
+                if (class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
+                    $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('pdf.purchase-order', ['po' => $purchaseOrder]);
+                    return $pdf->download("PO-{$purchaseOrder->po_number}.pdf");
+                }
+
+                // Fallback: Return HTML view that can be printed to PDF using browser
+                return view('pdf.purchase-order', ['po' => $purchaseOrder]);
+            }
+        }
+        
+        // If no valid token, check if user is authenticated via sanctum middleware
+        $user = request()->user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated'], 401);
+        }
+        
+        if ($user->role === 'section_head' && $purchaseOrder->department_id !== $user->department_id) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
         $purchaseOrder->load(['items.product', 'supplier', 'department', 'creator']);
 
         // Check if DomPDF is available

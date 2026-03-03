@@ -18,10 +18,24 @@ class BatchTrackingController extends Controller
 
     /**
      * Get all batches
+     * Admin sees all, section heads see only their department's batches
      */
     public function index(Request $request)
     {
         $query = ProductBatch::with(['product', 'supplier', 'purchaseOrder']);
+
+        // Department-based authorization: section heads see only their department
+        $user = $request->user();
+        if ($user->role === 'section_head' && $user->department_id) {
+            $query->whereHas('product', function ($q) use ($user) {
+                $q->where('department_id', $user->department_id);
+            });
+        } elseif ($request->filled('department_id')) {
+            // Admin can filter by department
+            $query->whereHas('product', function ($q) use ($request) {
+                $q->where('department_id', $request->department_id);
+            });
+        }
 
         // Filter by status
         if ($request->filled('status')) {
@@ -57,7 +71,7 @@ class BatchTrackingController extends Controller
             'product_id' => 'required|exists:products,id',
             'batch_number' => 'required|string|unique:product_batches,batch_number',
             'manufacturing_date' => 'nullable|date',
-            'expiry_date' => 'nullable|date|after:manufacturing_date',
+            'expiry_date' => 'nullable|date|after_or_equal:today',
             'quantity_received' => 'required|integer|min:1',
             'cost_price' => 'required|numeric|min:0',
             'selling_price' => 'required|numeric|min:0',

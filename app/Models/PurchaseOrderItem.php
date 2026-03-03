@@ -21,6 +21,9 @@ class PurchaseOrderItem extends Model
         'discount_percent',
         'line_total',
         'notes',
+        'batch_number',
+        'manufacturing_date',
+        'expiry_date',
     ];
 
     protected $casts = [
@@ -30,6 +33,8 @@ class PurchaseOrderItem extends Model
         'vat_rate' => 'decimal:2',
         'discount_percent' => 'decimal:2',
         'line_total' => 'decimal:2',
+        'manufacturing_date' => 'date',
+        'expiry_date' => 'date',
     ];
 
     /**

@@ -27,6 +27,7 @@ class Product extends Model
         'is_active',
         'is_featured',
         'expiry_date',
+        'manufacturing_date',
         'batch_number',
         'serial_number',
         'reorder_point',
@@ -148,6 +149,7 @@ class Product extends Model
             'max_stock_level' => 'integer',
             'auto_reorder_quantity' => 'integer',
             'expiry_date' => 'date',
+            'manufacturing_date' => 'date',
         ];
     }
 

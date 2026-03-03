@@ -20,6 +20,8 @@ use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\PrescriptionController;
 use App\Http\Controllers\Api\ControlledSubstanceController;
 use App\Http\Controllers\Api\AuditLogController;
+use App\Http\Controllers\Api\BackupController;
+use App\Http\Controllers\Api\AlertController;
 use App\Http\Controllers\Api\CustomerAuthController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\OrderController;
@@ -190,6 +192,7 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
         Route::get('/sales/summary', [SaleController::class, 'summary']);
         Route::get('/sales/export', [SaleController::class, 'exportCsv']);
         Route::get('/sales/{sale}', [SaleController::class, 'show']);
+        Route::get('/sales/{sale}/receipt', [SaleController::class, 'printReceipt']);
         Route::post('/sales/{sale}/payment', [SaleController::class, 'recordPayment']);
         Route::delete('/sales/{sale}', [SaleController::class, 'destroy']);
     });
@@ -276,6 +279,27 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
         Route::get('/', [AuditLogController::class, 'index']);
         Route::get('/statistics', [AuditLogController::class, 'statistics']);
         Route::get('/{auditLog}', [AuditLogController::class, 'show']);
+    });
+
+    // Backup & Restore
+    Route::prefix('backups')->group(function () {
+        // All authenticated users can list, create, download, and delete backups
+        Route::get('/', [BackupController::class, 'index']);
+        Route::post('/create', [BackupController::class, 'create']);
+        Route::get('/{filename}/download', [BackupController::class, 'download']);
+        Route::delete('/{filename}', [BackupController::class, 'destroy']);
+        
+        // Upload and Restore - Master Admin only (checked in controller)
+        Route::post('/upload', [BackupController::class, 'upload']);
+        Route::post('/{filename}/restore', [BackupController::class, 'restore']);
+    });
+
+    // Alerts (Low Stock, Expiry)
+    Route::prefix('alerts')->group(function () {
+        Route::get('/summary', [AlertController::class, 'summary']);
+        Route::get('/low-stock', [AlertController::class, 'lowStock']);
+        Route::get('/expiring-batches', [AlertController::class, 'expiringBatches']);
+        Route::get('/expired-batches', [AlertController::class, 'expiredBatches']);
     });
 
     /* E-commerce Settings (Admin only) */

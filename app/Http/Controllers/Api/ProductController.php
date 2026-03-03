@@ -116,6 +116,12 @@ class ProductController extends Controller
             'image'               => ['nullable', 'image', 'max:2048'],
             'is_active'           => ['boolean'],
             'is_featured'         => ['boolean'],
+            // WORLD-CLASS: Batch & Expiry Tracking
+            'track_batch'         => ['boolean'],
+            'track_expiry'        => ['boolean'],
+            'batch_number'        => ['nullable', 'string', 'max:255'],
+            'manufacturing_date'  => ['nullable', 'date', 'before_or_equal:today'],
+            'expiry_date'         => ['nullable', 'date', 'after_or_equal:today'],
         ]);
 
         $department = Department::findOrFail($validated['department_id']);
@@ -148,6 +154,12 @@ class ProductController extends Controller
             'image'               => ['nullable', 'image', 'max:2048'],
             'is_active'           => ['boolean'],
             'is_featured'         => ['boolean'],
+            // WORLD-CLASS: Batch & Expiry Tracking
+            'track_batch'         => ['boolean'],
+            'track_expiry'        => ['boolean'],
+            'batch_number'        => ['nullable', 'string', 'max:255'],
+            'manufacturing_date'  => ['nullable', 'date', 'before_or_equal:today'],
+            'expiry_date'         => ['nullable', 'date', 'after_or_equal:today'],
         ]);
 
         if ($request->hasFile('image')) {

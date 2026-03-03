@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\PurchaseOrder;
 use App\Models\PurchaseOrderItem;
 use App\Models\Product;
+use App\Models\ProductBatch;
 use App\Models\StockMovement;
 use App\Models\ProductPriceHistory;
 use Illuminate\Support\Facades\DB;
@@ -49,12 +50,12 @@ class PurchaseOrderService
                 'notes' => $data['notes'] ?? null,
             ]);
 
-            // Create PO items
+            // Create PO items with batch/expiry tracking
             foreach ($data['items'] as $item) {
                 $lineTotal = $item['quantity_ordered'] * $item['unit_cost'];
                 $lineTotal -= $lineTotal * ($item['discount_percent'] ?? 0) / 100;
 
-                PurchaseOrderItem::create([
+                $poItem = PurchaseOrderItem::create([
                     'purchase_order_id' => $po->id,
                     'product_id' => $item['product_id'],
                     'quantity_ordered' => $item['quantity_ordered'],
@@ -63,7 +64,32 @@ class PurchaseOrderService
                     'discount_percent' => $item['discount_percent'] ?? 0,
                     'line_total' => $lineTotal,
                     'notes' => $item['notes'] ?? null,
+                    'unit_type' => $item['unit_type'] ?? 'piece',
+                    'batch_number' => $item['batch_number'] ?? null,
+                    'manufacturing_date' => $item['manufacturing_date'] ?? null,
+                    'expiry_date' => $item['expiry_date'] ?? null,
                 ]);
+
+                // WORLD-CLASS: Create batch record if batch/expiry data provided
+                if (!empty($item['batch_number']) || !empty($item['expiry_date'])) {
+                    // Get product to retrieve selling price
+                    $product = Product::findOrFail($item['product_id']);
+                    
+                    ProductBatch::create([
+                        'product_id' => $item['product_id'],
+                        'purchase_order_id' => $po->id,
+                        'purchase_order_item_id' => $poItem->id,
+                        'batch_number' => $item['batch_number'] ?? 'PO-' . $poNumber . '-' . $item['product_id'],
+                        'quantity_received' => 0, // Will be updated when goods are received
+                        'quantity_remaining' => 0,
+                        'cost_price' => $item['unit_cost'],
+                        'selling_price' => $product->price ?? $item['unit_cost'], // Use product's selling price or fallback to cost
+                        'manufacturing_date' => $item['manufacturing_date'] ?? null,
+                        'expiry_date' => $item['expiry_date'] ?? null,
+                        'supplier_id' => $data['supplier_id'],
+                        'status' => 'active', // Batch is created as active, will track expiry separately
+                    ]);
+                }
             }
 
             Log::info('Purchase Order created', [
@@ -126,8 +152,80 @@ class PurchaseOrderService
                     throw new \Exception("Cannot receive more than ordered quantity for product ID: {$itemData['product_id']}");
                 }
 
-                // Update PO item
-                $poItem->increment('quantity_received', $quantityToReceive);
+                // Update PO item with batch/expiry data if provided during receiving
+                $updateData = ['quantity_received' => $poItem->quantity_received + $quantityToReceive];
+                
+                // Update batch info if provided (overrides original data)
+                if (isset($itemData['batch_number'])) {
+                    $updateData['batch_number'] = $itemData['batch_number'];
+                }
+                if (isset($itemData['manufacturing_date'])) {
+                    $updateData['manufacturing_date'] = $itemData['manufacturing_date'];
+                }
+                if (isset($itemData['expiry_date'])) {
+                    $updateData['expiry_date'] = $itemData['expiry_date'];
+                }
+                
+                $poItem->update($updateData);
+
+                // WORLD-CLASS: Update or create batch records
+                $batchNumber = $itemData['batch_number'] ?? $poItem->batch_number ?? null;
+                $expiryDate = $itemData['expiry_date'] ?? $poItem->expiry_date ?? null;
+                
+                // Find existing batch - check multiple ways to find it
+                $batch = ProductBatch::where('purchase_order_id', $po->id)
+                    ->where('product_id', $itemData['product_id'])
+                    ->first();
+                
+                // If no batch found by PO, try to find by item_id
+                if (!$batch) {
+                    $batch = ProductBatch::where('purchase_order_item_id', $poItem->id)
+                        ->where('product_id', $itemData['product_id'])
+                        ->first();
+                }
+                
+                if ($batch) {
+                    // Update existing batch
+                    $batch->increment('quantity_received', $quantityToReceive);
+                    $batch->increment('quantity_remaining', $quantityToReceive);
+                    $batch->update([
+                        'status' => 'active',
+                        'batch_number' => $batchNumber ?? $batch->batch_number,
+                        'manufacturing_date' => $itemData['manufacturing_date'] ?? $batch->manufacturing_date,
+                        'expiry_date' => $expiryDate ?? $batch->expiry_date,
+                    ]);
+                    
+                    Log::info('Batch updated', [
+                        'batch_number' => $batch->batch_number,
+                        'quantity_received' => $quantityToReceive,
+                        'expiry_date' => $batch->expiry_date,
+                    ]);
+                } elseif ($batchNumber || $expiryDate) {
+                    // Create new batch if batch/expiry data provided during receiving
+                    // Get product to retrieve selling price
+                    $product = Product::findOrFail($itemData['product_id']);
+                    
+                    ProductBatch::create([
+                        'product_id' => $itemData['product_id'],
+                        'purchase_order_id' => $po->id,
+                        'purchase_order_item_id' => $poItem->id,
+                        'batch_number' => $batchNumber ?? 'PO-' . $po->po_number . '-' . $itemData['product_id'],
+                        'quantity_received' => $quantityToReceive,
+                        'quantity_remaining' => $quantityToReceive,
+                        'cost_price' => $poItem->unit_cost,
+                        'selling_price' => $product->price ?? $poItem->unit_cost, // Use product's selling price or fallback to cost
+                        'manufacturing_date' => $itemData['manufacturing_date'] ?? null,
+                        'expiry_date' => $expiryDate,
+                        'supplier_id' => $po->supplier_id,
+                        'status' => 'active',
+                    ]);
+                    
+                    Log::info('Batch created during receiving', [
+                        'batch_number' => $batchNumber,
+                        'quantity_received' => $quantityToReceive,
+                        'expiry_date' => $expiryDate,
+                    ]);
+                }
 
                 // Update product stock and cost
                 $product = Product::lockForUpdate()->findOrFail($itemData['product_id']);
