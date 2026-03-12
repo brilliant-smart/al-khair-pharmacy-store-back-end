@@ -127,6 +127,17 @@ class PurchaseOrderController extends Controller
      */
     public function store(Request $request)
     {
+        // Convert month/year expiry dates to last day of month for all items
+        if ($request->has('items')) {
+            $items = $request->items;
+            foreach ($items as $index => $item) {
+                if (!empty($item['expiry_date'])) {
+                    $items[$index]['expiry_date'] = $this->convertToLastDayOfMonth($item['expiry_date']);
+                }
+            }
+            $request->merge(['items' => $items]);
+        }
+
         $validated = $request->validate([
             'supplier_id' => 'required|exists:suppliers,id',
             'department_id' => 'nullable|exists:departments,id',
@@ -146,10 +157,10 @@ class PurchaseOrderController extends Controller
             // VAT/Tax removed - Nigeria uses inclusive pricing
             'items.*.discount_percent' => 'nullable|numeric|min:0|max:100',
             'items.*.notes' => 'nullable|string',
-            // WORLD-CLASS: Batch & Expiry Tracking
+            // WORLD-CLASS: Batch & Expiry Tracking (All optional - not all products have expiry dates)
             'items.*.batch_number' => 'nullable|string|max:255',
             'items.*.manufacturing_date' => 'nullable|date|before_or_equal:today',
-            'items.*.expiry_date' => 'nullable|date|after_or_equal:today',
+            'items.*.expiry_date' => 'nullable|date', // Allow any date - some products may already be near expiry
         ]);
 
         try {
@@ -389,13 +400,24 @@ class PurchaseOrderController extends Controller
         }
 
         try {
+            // Convert month/year expiry dates to last day of month for all items
+            if ($request->has('items')) {
+                $items = $request->items;
+                foreach ($items as $index => $item) {
+                    if (!empty($item['expiry_date'])) {
+                        $items[$index]['expiry_date'] = $this->convertToLastDayOfMonth($item['expiry_date']);
+                    }
+                }
+                $request->merge(['items' => $items]);
+            }
+
             $validated = $request->validate([
                 'items' => 'required|array|min:1',
                 'items.*.product_id' => 'required|exists:products,id',
                 'items.*.quantity_received' => 'required|integer|min:1',
                 'items.*.batch_number' => 'nullable|string|max:255',
                 'items.*.manufacturing_date' => 'nullable|date|before_or_equal:today',
-                'items.*.expiry_date' => 'nullable|date|after_or_equal:today',
+                'items.*.expiry_date' => 'nullable|date', // Allow any date - validation happens at product level
             ]);
         } catch (\Illuminate\Validation\ValidationException $e) {
             \Log::error('Validation failed for receive goods', [
@@ -507,47 +529,23 @@ class PurchaseOrderController extends Controller
 
     /**
      * Export purchase order as PDF
-     * GET /api/purchase-orders/{purchaseOrder}/pdf
+     * WEB ROUTE: GET /admin/purchase-orders/{purchaseOrder}/pdf
+     * Authentication handled by auth.token middleware
      */
     public function exportPdf(Request $request, PurchaseOrder $purchaseOrder)
     {
-        // Support token authentication via query parameter for new window/tab
-        $token = $request->input('token') ?? $request->bearerToken();
+        // Get authenticated user (set by middleware)
+        $user = $request->user();
         
-        if ($token) {
-            $tokenModel = \Laravel\Sanctum\PersonalAccessToken::findToken($token);
-            if ($tokenModel) {
-                $user = $tokenModel->tokenable;
-                
-                // Authorization check
-                if ($user->role === 'section_head' && $purchaseOrder->department_id !== $user->department_id) {
-                    return response()->json(['message' => 'Unauthorized'], 403);
-                }
-                
-                $purchaseOrder->load(['items.product', 'supplier', 'department', 'creator']);
-
-                // Check if DomPDF is available
-                if (class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
-                    $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('pdf.purchase-order', ['po' => $purchaseOrder]);
-                    return $pdf->download("PO-{$purchaseOrder->po_number}.pdf");
-                }
-
-                // Fallback: Return HTML view that can be printed to PDF using browser
-                return view('pdf.purchase-order', ['po' => $purchaseOrder]);
-            }
-        }
-        
-        // If no valid token, check if user is authenticated via sanctum middleware
-        $user = request()->user();
-        if (!$user) {
-            return response()->json(['message' => 'Unauthenticated'], 401);
-        }
-        
+        // Authorization check - section heads can only view their department's POs
         if ($user->role === 'section_head' && $purchaseOrder->department_id !== $user->department_id) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+            return response()->view('errors.403', [
+                'message' => 'You are not authorized to view this purchase order.'
+            ], 403);
         }
-
-        $purchaseOrder->load(['items.product', 'supplier', 'department', 'creator']);
+        
+        // Load relationships
+        $purchaseOrder->load(['items.product', 'supplier', 'department', 'creator', 'approver', 'receiver']);
 
         // Check if DomPDF is available
         if (class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
@@ -706,5 +704,39 @@ class PurchaseOrderController extends Controller
         return response()->json([
             'message' => 'Purchase order deleted successfully',
         ]);
+    }
+
+    /**
+     * Convert month/year format (YYYY-MM) to last day of month (YYYY-MM-DD)
+     * Example: "2026-03" becomes "2026-03-31"
+     * Full dates are passed through unchanged
+     */
+    private function convertToLastDayOfMonth($date)
+    {
+        if (empty($date)) {
+            return $date;
+        }
+
+        // If already a full date (YYYY-MM-DD), return as is
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            return $date;
+        }
+
+        // If month/year format (YYYY-MM), convert to last day of month
+        if (preg_match('/^\d{4}-\d{2}$/', $date)) {
+            try {
+                $dateObj = \DateTime::createFromFormat('Y-m', $date);
+                if ($dateObj) {
+                    // Get last day of the month
+                    return $dateObj->format('Y-m-t');
+                }
+            } catch (\Exception $e) {
+                // If parsing fails, return original
+                return $date;
+            }
+        }
+
+        // Return original if format not recognized
+        return $date;
     }
 }

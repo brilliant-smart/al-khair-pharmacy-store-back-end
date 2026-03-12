@@ -13,6 +13,10 @@ class Sale extends Model
     use HasFactory, SoftDeletes;
 
     protected $fillable = [
+        'status',
+        'voided_by',
+        'void_reason',
+        'voided_at',
         'sale_number',
         'department_id',
         'cashier_id',
@@ -34,6 +38,7 @@ class Sale extends Model
 
     protected $casts = [
         'sale_date' => 'datetime',
+        'voided_at' => 'datetime',
         'subtotal' => 'decimal:2',
         'vat_amount' => 'decimal:2',
         'discount_amount' => 'decimal:2',
@@ -55,6 +60,26 @@ class Sale extends Model
     public function cashier(): BelongsTo
     {
         return $this->belongsTo(User::class, 'cashier_id');
+    }
+
+    public function user()
+    {
+        return $this->belongsTo(User::class, 'user_id');
+    }
+
+    public function voidedBy()
+    {
+        return $this->belongsTo(User::class, 'voided_by');
+    }
+
+    public function payments()
+    {
+        return $this->hasMany(Payment::class);
+    }
+
+    public function customer()
+    {
+        return $this->belongsTo(Customer::class);
     }
 
     public function items(): HasMany

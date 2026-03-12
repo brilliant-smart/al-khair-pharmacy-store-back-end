@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Sale;
 use App\Services\SaleService;
 use Illuminate\Http\Request;
+use Barryvdh\DomPDF\Facade\Pdf;
 
 class SaleController extends Controller
 {
@@ -200,7 +201,139 @@ class SaleController extends Controller
     }
 
     /**
-     * Export sales as CSV
+     * Get comprehensive sales analytics
+     * GET /api/sales/analytics
+     */
+    public function analytics(Request $request)
+    {
+        $period = $request->get('period', 'this_month');
+        $startDate = null;
+        $endDate = null;
+
+        // Calculate date range based on period
+        switch ($period) {
+            case 'today':
+                $startDate = now()->startOfDay();
+                $endDate = now()->endOfDay();
+                break;
+            case 'yesterday':
+                $startDate = now()->subDay()->startOfDay();
+                $endDate = now()->subDay()->endOfDay();
+                break;
+            case 'this_week':
+                $startDate = now()->startOfWeek();
+                $endDate = now()->endOfWeek();
+                break;
+            case 'this_month':
+                $startDate = now()->startOfMonth();
+                $endDate = now()->endOfMonth();
+                break;
+            case 'custom':
+                $startDate = $request->get('start_date', now()->startOfMonth());
+                $endDate = $request->get('end_date', now()->endOfMonth());
+                break;
+            default:
+                $startDate = now()->startOfMonth();
+                $endDate = now()->endOfMonth();
+        }
+
+        $query = Sale::query();
+
+        // Department filter
+        if ($request->user()->role === 'section_head') {
+            $query->where('department_id', $request->user()->department_id);
+        } elseif ($request->filled('department_id')) {
+            $query->where('department_id', $request->department_id);
+        }
+
+        // Date range
+        $query->whereBetween('sale_date', [$startDate, $endDate]);
+
+        // Get all sales for the period
+        $sales = $query->get();
+
+        // Calculate summary metrics
+        $summary = [
+            'total_sales' => $sales->count(),
+            'total_orders' => $sales->count(),
+            'total_revenue' => $sales->sum('total_amount'),
+            'total_profit' => $sales->sum('gross_profit'),
+            'total_cogs' => $sales->sum('cost_of_goods_sold'),
+            'average_sale_value' => $sales->count() > 0 ? $sales->avg('total_amount') : 0,
+            'average_profit' => $sales->count() > 0 ? $sales->avg('gross_profit') : 0,
+            'profit_margin' => $sales->sum('total_amount') > 0 
+                ? ($sales->sum('gross_profit') / $sales->sum('total_amount')) * 100 
+                : 0,
+        ];
+
+        // Sales by payment method
+        $paymentMethodBreakdown = $sales->groupBy('sale_type')->map(function ($items, $method) {
+            return [
+                'method' => $method,
+                'count' => $items->count(),
+                'revenue' => $items->sum('total_amount'),
+                'profit' => $items->sum('gross_profit'),
+            ];
+        })->values();
+
+        // Daily trend
+        $dailyTrend = [];
+        if (\Carbon\Carbon::parse($startDate)->diffInDays(\Carbon\Carbon::parse($endDate)) > 1) {
+            $dailyTrend = $sales->groupBy(function ($sale) {
+                return $sale->sale_date->format('Y-m-d');
+            })->map(function ($items, $date) {
+                return [
+                    'date' => $date,
+                    'count' => $items->count(),
+                    'revenue' => $items->sum('total_amount'),
+                    'profit' => $items->sum('gross_profit'),
+                    'cogs' => $items->sum('cost_of_goods_sold'),
+                ];
+            })->values();
+        }
+
+        // Top selling products (from sale items)
+        $topProducts = \DB::table('sale_items')
+            ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
+            ->join('products', 'sale_items.product_id', '=', 'products.id')
+            ->whereBetween('sales.sale_date', [$startDate, $endDate])
+            ->select(
+                'products.id',
+                'products.name',
+                \DB::raw('SUM(sale_items.quantity) as total_quantity'),
+                \DB::raw('SUM(sale_items.line_total) as total_revenue'),
+                \DB::raw('SUM(sale_items.quantity * sale_items.unit_cost) as total_cost')
+            )
+            ->groupBy('products.id', 'products.name')
+            ->orderByDesc('total_quantity')
+            ->limit(10)
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'product_id' => $item->id,
+                    'product_name' => $item->name,
+                    'quantity_sold' => $item->total_quantity,
+                    'revenue' => $item->total_revenue,
+                    'cost' => $item->total_cost,
+                    'profit' => $item->total_revenue - $item->total_cost,
+                ];
+            });
+
+        return response()->json([
+            'summary' => $summary,
+            'payment_method_breakdown' => $paymentMethodBreakdown,
+            'daily_trend' => $dailyTrend,
+            'top_products' => $topProducts,
+            'period' => [
+                'start' => $startDate,
+                'end' => $endDate,
+                'type' => $period,
+            ],
+        ]);
+    }
+
+    /**
+     * Export sales as CSV or PDF
      * GET /api/sales/export
      */
     public function exportCsv(Request $request)
@@ -222,7 +355,35 @@ class SaleController extends Controller
         }
 
         $sales = $query->latest('sale_date')->get();
+        
+        $format = $request->get('format', 'csv');
+        
+        // Calculate summary for PDF
+        $summary = [
+            'total_sales' => $sales->count(),
+            'total_revenue' => $sales->sum('total_amount'),
+            'total_profit' => $sales->sum('gross_profit'),
+            'total_cogs' => $sales->sum('cost_of_goods_sold'),
+            'profit_margin' => $sales->sum('total_amount') > 0 
+                ? ($sales->sum('gross_profit') / $sales->sum('total_amount')) * 100 
+                : 0,
+        ];
+        
+        // Get period info
+        $period = [
+            'start' => $request->get('start_date', now()->startOfMonth()),
+            'end' => $request->get('end_date', now()->endOfMonth()),
+        ];
+        
+        // PDF Export
+        if ($format === 'pdf') {
+            $pdf = Pdf::loadView('pdf.sales-report', compact('sales', 'summary', 'period'));
+            $pdf->setPaper('a4', 'portrait');
+            $filename = 'sales-report-' . date('Y-m-d') . '.pdf';
+            return $pdf->download($filename);
+        }
 
+        // CSV Export
         $filename = 'sales-export-' . date('Y-m-d') . '.csv';
 
         $headers = [
@@ -252,20 +413,24 @@ class SaleController extends Controller
 
             // Data
             foreach ($sales as $sale) {
+                $profitMargin = $sale->total_amount > 0 
+                    ? ($sale->gross_profit / $sale->total_amount) * 100 
+                    : 0;
+                    
                 fputcsv($file, [
                     $sale->sale_number,
                     $sale->sale_date->format('Y-m-d H:i'),
-                    $sale->department->name,
-                    $sale->cashier->name,
+                    $sale->department ? $sale->department->name : 'N/A',
+                    $sale->cashier ? $sale->cashier->name : 'N/A',
                     $sale->sale_type,
-                    $sale->customer_name,
+                    $sale->customer_name ?? 'Walk-in Customer',
                     number_format($sale->total_amount, 2),
-                    number_format($sale->cost_of_goods_sold, 2),
-                    number_format($sale->gross_profit, 2),
-                    number_format($sale->profit_margin, 2),
+                    number_format($sale->cost_of_goods_sold ?? 0, 2),
+                    number_format($sale->gross_profit ?? 0, 2),
+                    number_format($profitMargin, 2),
                     $sale->payment_status,
-                    number_format($sale->amount_paid, 2),
-                    number_format($sale->amount_due, 2),
+                    number_format($sale->amount_paid ?? 0, 2),
+                    number_format($sale->amount_due ?? 0, 2),
                 ]);
             }
 
@@ -276,41 +441,49 @@ class SaleController extends Controller
     }
 
     /**
-     * Print receipt
-     * GET /api/sales/{sale}/receipt
+     * Print receipt (standard format)
+     * WEB ROUTE: GET /admin/sales/{sale}/receipt
+     * Authentication handled by auth.token middleware
      */
     public function printReceipt(Request $request, Sale $sale)
     {
-        // Support token authentication via query parameter for print preview
-        $token = $request->input('token') ?? $request->bearerToken();
+        // Get authenticated user (set by middleware)
+        $user = $request->user();
         
-        if ($token) {
-            $tokenModel = \Laravel\Sanctum\PersonalAccessToken::findToken($token);
-            if ($tokenModel) {
-                $user = $tokenModel->tokenable;
-                
-                // Authorization check
-                if ($user->role === 'section_head' && $sale->department_id !== $user->department_id) {
-                    return response()->json(['message' => 'Unauthorized'], 403);
-                }
-                
-                $sale->load(['items.product', 'user']);
-                return view('pdf.sale-receipt', compact('sale'));
-            }
-        }
-        
-        // If no valid token, check if user is authenticated via sanctum middleware
-        $user = request()->user();
-        if (!$user) {
-            return response()->json(['message' => 'Unauthenticated'], 401);
-        }
-        
+        // Authorization check - section heads can only view their department's sales
         if ($user->role === 'section_head' && $sale->department_id !== $user->department_id) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+            return response()->view('errors.403', [
+                'message' => 'You are not authorized to view this receipt.'
+            ], 403);
         }
-
-        $sale->load(['items.product', 'user']);
+        
+        // Load relationships and return printable receipt view
+        $sale->load(['items.product', 'user', 'department', 'cashier']);
+        
         return view('pdf.sale-receipt', compact('sale'));
+    }
+
+    /**
+     * Print thermal receipt (80mm POS printer optimized)
+     * WEB ROUTE: GET /admin/receipts/{sale}
+     * Authentication handled by auth.token middleware
+     */
+    public function thermalReceipt(Request $request, Sale $sale)
+    {
+        // Get authenticated user (set by middleware)
+        $user = $request->user();
+        
+        // Authorization check - section heads can only view their department's sales
+        if ($user->role === 'section_head' && $sale->department_id !== $user->department_id) {
+            return response()->view('errors.403', [
+                'message' => 'You are not authorized to view this receipt.'
+            ], 403);
+        }
+        
+        // Load relationships for thermal receipt
+        $sale->load(['items.product', 'user', 'department', 'cashier']);
+        
+        return view('admin.receipts.thermal', compact('sale'));
     }
 
     /**

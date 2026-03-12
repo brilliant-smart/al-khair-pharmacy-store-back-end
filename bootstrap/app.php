@@ -20,6 +20,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // Register middleware aliases
         $middleware->alias([
             'hide.profit' => \App\Http\Middleware\HideProfitData::class,
+            'auth.token' => \App\Http\Middleware\AuthenticateWithToken::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

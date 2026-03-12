@@ -19,6 +19,16 @@ class ProductController extends Controller
         $query = Product::with('department')
             ->where('is_active', true);
 
+        // Filter by search query (name, SKU, barcode)
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'LIKE', "%{$search}%")
+                  ->orWhere('sku', 'LIKE', "%{$search}%")
+                  ->orWhere('barcode', 'LIKE', "%{$search}%");
+            });
+        }
+
         // Filter by department_id
         if ($request->filled('department_id')) {
             $query->where('department_id', $request->department_id);
@@ -103,6 +113,13 @@ class ProductController extends Controller
     /** Protected: Create product */
     public function store(Request $request)
     {
+        // Convert month/year expiry date (YYYY-MM) to last day of month (YYYY-MM-DD)
+        if ($request->filled('expiry_date')) {
+            $request->merge([
+                'expiry_date' => $this->convertToLastDayOfMonth($request->expiry_date)
+            ]);
+        }
+
         $validated = $request->validate([
             'name'                => ['required', 'string', 'max:255'],
             'slug'                => ['required', 'string', 'max:255', 'unique:products,slug'],
@@ -142,11 +159,18 @@ class ProductController extends Controller
     {
         $this->authorize('update', $product);
 
+        // Convert month/year expiry date (YYYY-MM) to last day of month (YYYY-MM-DD)
+        if ($request->filled('expiry_date')) {
+            $request->merge([
+                'expiry_date' => $this->convertToLastDayOfMonth($request->expiry_date)
+            ]);
+        }
+
         $validated = $request->validate([
             'name'                => ['sometimes', 'string', 'max:255'],
             'slug'                => ['sometimes', 'string', 'max:255', 'unique:products,slug,' . $product->id],
             'sku'                 => ['sometimes', 'string', 'max:100', 'unique:products,sku,' . $product->id],
-            'barcode'             => ['sometimes', 'string', 'max:100', 'unique:products,barcode,' . $product->id],
+            'barcode'             => ['nullable', 'string', 'max:100', 'unique:products,barcode,' . $product->id],
             'description'         => ['nullable', 'string'],
             'price'               => ['sometimes', 'numeric', 'min:0'],
             'stock_quantity'      => ['sometimes', 'integer', 'min:0'],
@@ -161,6 +185,11 @@ class ProductController extends Controller
             'manufacturing_date'  => ['nullable', 'date', 'before_or_equal:today'],
             'expiry_date'         => ['nullable', 'date', 'after_or_equal:today'],
         ]);
+
+        // Handle barcode deletion - if barcode is explicitly set to null or empty string, delete it
+        if ($request->has('barcode') && empty($request->barcode)) {
+            $validated['barcode'] = null;
+        }
 
         if ($request->hasFile('image')) {
             if ($product->image_url) {
@@ -190,5 +219,39 @@ class ProductController extends Controller
         return response()->json([
             'message' => 'Product deleted successfully',
         ]);
+    }
+
+    /**
+     * Convert month/year format (YYYY-MM) to last day of month (YYYY-MM-DD)
+     * Example: "2026-03" becomes "2026-03-31"
+     * Full dates are passed through unchanged
+     */
+    private function convertToLastDayOfMonth($date)
+    {
+        if (empty($date)) {
+            return $date;
+        }
+
+        // If already a full date (YYYY-MM-DD), return as is
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            return $date;
+        }
+
+        // If month/year format (YYYY-MM), convert to last day of month
+        if (preg_match('/^\d{4}-\d{2}$/', $date)) {
+            try {
+                $dateObj = \DateTime::createFromFormat('Y-m', $date);
+                if ($dateObj) {
+                    // Get last day of the month
+                    return $dateObj->format('Y-m-t');
+                }
+            } catch (\Exception $e) {
+                // If parsing fails, return original
+                return $date;
+            }
+        }
+
+        // Return original if format not recognized
+        return $date;
     }
 }

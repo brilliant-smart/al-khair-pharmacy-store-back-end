@@ -2,8 +2,10 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Receipt #{{ $sale->receipt_number }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Receipt #{{ $sale->sale_number ?? $sale->id }}</title>
     <style>
+        /* Thermal Printer Optimized (80mm width) */
         @page {
             size: 80mm auto;
             margin: 5mm;
@@ -21,6 +23,8 @@
             line-height: 1.4;
             color: #000;
             width: 70mm;
+            margin: 0 auto;
+            padding: 5mm;
         }
         
         .header {
@@ -64,14 +68,12 @@
         }
         
         .item-row {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 5px;
+            margin-bottom: 8px;
         }
         
         .item-name {
-            flex: 1;
             font-weight: bold;
+            margin-bottom: 2px;
         }
         
         .item-details {
@@ -79,7 +81,6 @@
             justify-content: space-between;
             font-size: 10px;
             color: #333;
-            margin-bottom: 3px;
         }
         
         .totals {
@@ -120,14 +121,51 @@
             margin-bottom: 5px;
         }
         
+        /* Print-specific styles */
         @media print {
             body {
                 width: 70mm;
+                padding: 0;
+            }
+            
+            /* Hide print button when printing */
+            .no-print {
+                display: none !important;
+            }
+        }
+        
+        /* Print button (only visible on screen) */
+        .print-button {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            z-index: 1000;
+        }
+        
+        .print-button:hover {
+            background: #45a049;
+        }
+        
+        @media print {
+            .print-button {
+                display: none;
             }
         }
     </style>
 </head>
 <body>
+    <!-- Print Button (visible on screen only) -->
+    <button onclick="window.print()" class="print-button no-print">🖨️ Print Receipt</button>
+    
     <!-- Header -->
     <div class="header">
         <div class="store-name">AL-KHAIR PHARMACY & STORE</div>
@@ -144,7 +182,7 @@
     <!-- Receipt Info -->
     <div class="info-row">
         <span>Receipt #:</span>
-        <span><strong>{{ $sale->receipt_number }}</strong></span>
+        <span><strong>{{ $sale->sale_number ?? 'SALE-' . $sale->id }}</strong></span>
     </div>
     <div class="info-row">
         <span>Date:</span>
@@ -214,7 +252,22 @@
     <div class="footer">
         <div class="thank-you">THANK YOU FOR YOUR PATRONAGE!</div>
         <div>Visit us again soon</div>
-        <div style="margin-top: 5px;">{{ now()->format('d/m/Y H:i:s') }}</div>
+        <div style="margin-top: 5px;">Printed: {{ now()->format('d/m/Y H:i:s') }}</div>
     </div>
+
+    <!-- Auto-print script (optional - can be enabled/disabled) -->
+    <script>
+        // Optional: Auto-trigger print dialog when page loads
+        // Uncomment the line below to enable auto-print
+        // window.addEventListener('load', () => setTimeout(() => window.print(), 500));
+        
+        // Keyboard shortcut: Ctrl+P or Cmd+P
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+                e.preventDefault();
+                window.print();
+            }
+        });
+    </script>
 </body>
 </html>

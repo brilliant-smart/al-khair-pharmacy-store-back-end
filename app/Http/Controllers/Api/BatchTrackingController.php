@@ -67,6 +67,13 @@ class BatchTrackingController extends Controller
      */
     public function store(Request $request)
     {
+        // Convert month/year expiry date to last day of month
+        if ($request->filled('expiry_date')) {
+            $request->merge([
+                'expiry_date' => $this->convertToLastDayOfMonth($request->expiry_date)
+            ]);
+        }
+
         $validated = $request->validate([
             'product_id' => 'required|exists:products,id',
             'batch_number' => 'required|string|unique:product_batches,batch_number',
@@ -174,5 +181,39 @@ class BatchTrackingController extends Controller
         $report = $this->batchService->getBatchInventoryReport($departmentId);
 
         return response()->json($report);
+    }
+
+    /**
+     * Convert month/year format (YYYY-MM) to last day of month (YYYY-MM-DD)
+     * Example: "2026-03" becomes "2026-03-31"
+     * Full dates are passed through unchanged
+     */
+    private function convertToLastDayOfMonth($date)
+    {
+        if (empty($date)) {
+            return $date;
+        }
+
+        // If already a full date (YYYY-MM-DD), return as is
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            return $date;
+        }
+
+        // If month/year format (YYYY-MM), convert to last day of month
+        if (preg_match('/^\d{4}-\d{2}$/', $date)) {
+            try {
+                $dateObj = \DateTime::createFromFormat('Y-m', $date);
+                if ($dateObj) {
+                    // Get last day of the month
+                    return $dateObj->format('Y-m-t');
+                }
+            } catch (\Exception $e) {
+                // If parsing fails, return original
+                return $date;
+            }
+        }
+
+        // Return original if format not recognized
+        return $date;
     }
 }

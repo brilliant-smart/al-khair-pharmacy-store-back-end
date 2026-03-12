@@ -33,6 +33,8 @@ use App\Http\Controllers\Api\SecurityController;
 use App\Http\Controllers\Api\WebhookController;
 use App\Http\Controllers\Api\PriceHistoryController;
 use App\Http\Controllers\Api\SupplierPriceComparisonController;
+use App\Http\Controllers\Api\ExpenseController;
+use App\Http\Controllers\Api\ExpenseCategoryController;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Http\Request;
 
@@ -158,6 +160,19 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
 
     /* Suppliers */
     Route::apiResource('suppliers', SupplierController::class);
+
+    /* Expenses */
+    Route::prefix('expenses')->group(function () {
+        Route::get('/', [ExpenseController::class, 'index']);
+        Route::post('/', [ExpenseController::class, 'store']);
+        Route::get('/analytics', [ExpenseController::class, 'analytics']);
+        Route::get('/{expense}', [ExpenseController::class, 'show']);
+        Route::put('/{expense}', [ExpenseController::class, 'update']);
+        Route::delete('/{expense}', [ExpenseController::class, 'destroy']);
+    });
+
+    /* Expense Categories */
+    Route::apiResource('expense-categories', ExpenseCategoryController::class);
     Route::post('/suppliers/{supplier}/toggle-status', [SupplierController::class, 'toggleStatus']);
 
     /* Price History */
@@ -181,7 +196,7 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
     Route::post('/purchase-orders/{purchaseOrder}/cancel', [PurchaseOrderController::class, 'cancel']);
     Route::post('/purchase-orders/{purchaseOrder}/receive', [PurchaseOrderController::class, 'receiveGoods']);
     Route::post('/purchase-orders/{purchaseOrder}/record-payment', [PurchaseOrderController::class, 'recordPayment']);
-    Route::get('/purchase-orders/{purchaseOrder}/pdf', [PurchaseOrderController::class, 'exportPdf']);
+    // PDF export moved to web routes (routes/web.php) for browser printing
     Route::get('/purchase-orders-export', [PurchaseOrderController::class, 'exportAll']);
     Route::get('/purchase-orders/{purchaseOrder}/csv', [PurchaseOrderController::class, 'exportCsv']);
 
@@ -190,9 +205,10 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
         Route::get('/sales', [SaleController::class, 'index']);
         Route::post('/sales', [SaleController::class, 'store']);
         Route::get('/sales/summary', [SaleController::class, 'summary']);
+        Route::get('/sales/analytics', [SaleController::class, 'analytics']);
         Route::get('/sales/export', [SaleController::class, 'exportCsv']);
         Route::get('/sales/{sale}', [SaleController::class, 'show']);
-        Route::get('/sales/{sale}/receipt', [SaleController::class, 'printReceipt']);
+        // Receipt printing moved to web routes (routes/web.php) for browser printing
         Route::post('/sales/{sale}/payment', [SaleController::class, 'recordPayment']);
         Route::delete('/sales/{sale}', [SaleController::class, 'destroy']);
     });
@@ -300,6 +316,22 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
         Route::get('/low-stock', [AlertController::class, 'lowStock']);
         Route::get('/expiring-batches', [AlertController::class, 'expiringBatches']);
         Route::get('/expired-batches', [AlertController::class, 'expiredBatches']);
+    });
+
+    // POS System (World-Class)
+    Route::prefix('pos')->group(function () {
+        Route::post('/validate-stock', [\App\Http\Controllers\Api\POSController::class, 'validateStock']);
+        Route::post('/complete-sale', [\App\Http\Controllers\Api\POSController::class, 'completeSale']);
+        
+        // Hold & Recall
+        Route::post('/hold-cart', [\App\Http\Controllers\Api\POSController::class, 'holdCart']);
+        Route::get('/held-carts', [\App\Http\Controllers\Api\POSController::class, 'getHeldCarts']);
+        Route::get('/held-carts/{id}', [\App\Http\Controllers\Api\POSController::class, 'recallCart']);
+        Route::delete('/held-carts/{id}', [\App\Http\Controllers\Api\POSController::class, 'deleteHeldCart']);
+        
+        // Void & Reprint
+        Route::post('/void-sale/{sale}', [\App\Http\Controllers\Api\POSController::class, 'voidSale']);
+        Route::get('/reprint/{sale}', [\App\Http\Controllers\Api\POSController::class, 'getSaleForReprint']);
     });
 
     /* E-commerce Settings (Admin only) */
