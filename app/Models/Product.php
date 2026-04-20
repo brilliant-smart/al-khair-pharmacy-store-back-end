@@ -155,9 +155,17 @@ class Product extends Model
 
     public function getImageFullUrlAttribute(): ?string
     {
-        return $this->image_url
-            ? asset('storage/' . $this->image_url)
-            : null;
+        if (!$this->image_url) {
+            return null;
+        }
+
+        // For production, images are stored directly in public/storage
+        // For local development, they use the storage link
+        if (app()->environment('production')) {
+            return asset('storage/' . $this->image_url);
+        } else {
+            return asset('storage/' . $this->image_url);
+        }
     }
 
     /**
@@ -261,7 +269,16 @@ class Product extends Model
     {
         static::deleting(function ($product) {
             if ($product->image_url) {
-                Storage::disk('public')->delete($product->image_url);
+                if (app()->environment('production')) {
+                    // Delete from public/storage directory
+                    $imagePath = public_path('storage/' . $product->image_url);
+                    if (file_exists($imagePath)) {
+                        unlink($imagePath);
+                    }
+                } else {
+                    // Delete from storage using Laravel's Storage facade
+                    Storage::disk('public')->delete($product->image_url);
+                }
             }
         });
     }

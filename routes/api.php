@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\Admin\AdminDashboardController;
+use App\Http\Controllers\Api\ContactController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\DepartmentController;
@@ -39,11 +40,14 @@ use Illuminate\Support\Facades\Password;
 use Illuminate\Http\Request;
 
 //Login (Rate limited to prevent brute force)
-Route::middleware('throttle:5,1')->post('/login', [AuthController::class, 'login']);
+Route::middleware('throttle:20,1')->post('/login', [AuthController::class, 'login']);
 //Logout
 Route::middleware('auth:sanctum')->post('/logout', [AuthController::class, 'logout']);
 
 /* Public */
+/* Contact Form */
+Route::post('/contact', [ContactController::class, 'sendContactEmail'])->middleware('throttle:5,1');
+
 /* Products */
 Route::middleware('throttle:60,1')->group(function () {
     Route::get('/products', [ProductController::class, 'index']);
@@ -117,6 +121,7 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
     /* Products (Admin uses ID via separate routes) - Hide cost data from non-admin */
     Route::middleware('hide.profit')->group(function () {
         Route::post('/products', [ProductController::class, 'store']);
+        Route::get('/admin/products', [ProductController::class, 'adminIndex']);
         Route::put('/admin/products/{product}', [ProductController::class, 'update']);
         Route::post('/admin/products/{product}', [ProductController::class, 'update']); // Accept POST for FormData with _method
         Route::delete('/admin/products/{product}', [ProductController::class, 'destroy']);

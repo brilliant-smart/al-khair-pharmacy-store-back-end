@@ -45,6 +45,19 @@ return [
             'visibility' => 'public',
             'throw' => false,
             'report' => false,
+            // For shared hosting where symbolic links don't work well
+            // Use this to directly serve files from public directory
+            'serve' => true,
+        ],
+
+        // Alternative disk for shared hosting - stores directly in public directory
+        'public_direct' => [
+            'driver' => 'local',
+            'root' => public_path('storage'),
+            'url' => env('APP_URL').'/storage',
+            'visibility' => 'public',
+            'throw' => false,
+            'report' => false,
         ],
 
         's3' => [

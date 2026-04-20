@@ -8,10 +8,73 @@ use App\Models\Department;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Validation\Rule;
 
 class ProductController extends Controller
 {
     use AuthorizesRequests;
+
+    /** Admin: List all products (including inactive) */
+    public function adminIndex(Request $request)
+    {
+        $query = Product::with('department');
+
+        // Filter by search query (name, SKU, barcode)
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'LIKE', "%{$search}%")
+                  ->orWhere('sku', 'LIKE', "%{$search}%")
+                  ->orWhere('barcode', 'LIKE', "%{$search}%");
+            });
+        }
+
+        // Filter by department_id
+        if ($request->filled('department_id')) {
+            $query->where('department_id', $request->department_id);
+        }
+
+        // Filter by active status
+        if ($request->filled('is_active')) {
+            $query->where('is_active', $request->is_active === 'true' || $request->is_active === '1');
+        }
+
+        // Apply sorting
+        $sortBy = $request->get('sort_by', 'newest');
+        switch ($sortBy) {
+            case 'oldest':
+                $query->oldest();
+                break;
+            case 'price-low':
+                $query->orderBy('price', 'asc');
+                break;
+            case 'price-high':
+                $query->orderBy('price', 'desc');
+                break;
+            case 'name-asc':
+                $query->orderBy('name', 'asc');
+                break;
+            case 'name-desc':
+                $query->orderBy('name', 'desc');
+                break;
+            case 'newest':
+            default:
+                $query->latest();
+                break;
+        }
+
+        // Support custom limit for admin panel (without pagination)
+        if ($request->filled('limit')) {
+            $limit = min((int) $request->limit, 1000); // Max 1000 items
+            return response()->json(
+                $query->limit($limit)->get()
+            );
+        }
+
+        return response()->json(
+            $query->paginate(50)
+        );
+    }
 
     /** Public: List products (optionally by department) */
     public function index(Request $request)
@@ -122,9 +185,9 @@ class ProductController extends Controller
 
         $validated = $request->validate([
             'name'                => ['required', 'string', 'max:255'],
-            'slug'                => ['required', 'string', 'max:255', 'unique:products,slug'],
-            'sku'                 => ['nullable', 'string', 'max:100', 'unique:products,sku'],
-            'barcode'             => ['nullable', 'string', 'max:100', 'unique:products,barcode'],
+            'slug'                => ['required', 'string', 'max:255', Rule::unique('products')->whereNull('deleted_at')],
+            'sku'                 => ['nullable', 'string', 'max:100', Rule::unique('products')->whereNull('deleted_at')],
+            'barcode'             => ['nullable', 'string', 'max:100', Rule::unique('products')->whereNull('deleted_at')],
             'description'         => ['nullable', 'string'],
             'price'               => ['required', 'numeric', 'min:0'],
             'stock_quantity'      => ['nullable', 'integer', 'min:0'],
@@ -145,8 +208,18 @@ class ProductController extends Controller
         $this->authorize('create', [Product::class, $department]);
 
         if ($request->hasFile('image')) {
-            $validated['image_url'] = $request->file('image')
-                ->store('products', 'public');
+            // For shared hosting where symbolic links don't work well
+            // Store directly in public directory in production
+            if (app()->environment('production')) {
+                $image = $request->file('image');
+                $filename = time() . '_' . $image->getClientOriginalName();
+                $image->move(public_path('storage/products'), $filename);
+                $validated['image_url'] = 'products/' . $filename;
+            } else {
+                // Use standard storage for local development
+                $validated['image_url'] = $request->file('image')
+                    ->store('products', 'public');
+            }
         }
 
         $product = Product::create($validated);
@@ -168,9 +241,9 @@ class ProductController extends Controller
 
         $validated = $request->validate([
             'name'                => ['sometimes', 'string', 'max:255'],
-            'slug'                => ['sometimes', 'string', 'max:255', 'unique:products,slug,' . $product->id],
-            'sku'                 => ['sometimes', 'string', 'max:100', 'unique:products,sku,' . $product->id],
-            'barcode'             => ['nullable', 'string', 'max:100', 'unique:products,barcode,' . $product->id],
+            'slug'                => ['sometimes', 'string', 'max:255', Rule::unique('products')->whereNull('deleted_at')->ignore($product->id)],
+            'sku'                 => ['sometimes', 'string', 'max:100', Rule::unique('products')->whereNull('deleted_at')->ignore($product->id)],
+            'barcode'             => ['nullable', 'string', 'max:100', Rule::unique('products')->whereNull('deleted_at')->ignore($product->id)],
             'description'         => ['nullable', 'string'],
             'price'               => ['sometimes', 'numeric', 'min:0'],
             'stock_quantity'      => ['sometimes', 'integer', 'min:0'],
@@ -192,12 +265,28 @@ class ProductController extends Controller
         }
 
         if ($request->hasFile('image')) {
+            // Delete old image
             if ($product->image_url) {
-                Storage::disk('public')->delete($product->image_url);
+                if (app()->environment('production')) {
+                    $oldImagePath = public_path('storage/' . $product->image_url);
+                    if (file_exists($oldImagePath)) {
+                        unlink($oldImagePath);
+                    }
+                } else {
+                    Storage::disk('public')->delete($product->image_url);
+                }
             }
 
-            $validated['image_url'] = $request->file('image')
-                ->store('products', 'public');
+            // Store new image
+            if (app()->environment('production')) {
+                $image = $request->file('image');
+                $filename = time() . '_' . $image->getClientOriginalName();
+                $image->move(public_path('storage/products'), $filename);
+                $validated['image_url'] = 'products/' . $filename;
+            } else {
+                $validated['image_url'] = $request->file('image')
+                    ->store('products', 'public');
+            }
         }
 
         $product->update($validated);
